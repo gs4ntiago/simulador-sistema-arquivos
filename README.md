@@ -96,3 +96,86 @@ Unidades `KB`, `MB`, `GB`, `KiB`, `MiB` e `GiB` usam múltiplos de 1024; sem uni
 ```bash
 python3 -m unittest discover -s tests -v
 ```
+
+## Etapa 2 — E/S, escalonamento e RAID 5
+
+O módulo `filesystem/disk_io.py` reutiliza os comandos e a árvore da Etapa 1.
+Execute-o a partir da raiz do projeto. A versão original continua disponível em
+`python3 main.py`.
+
+### HDD e escalonamento
+
+```bash
+python3 -m filesystem.disk_io --blocks 16 --scheduler sstf
+```
+
+No simulador:
+
+```text
+io_demo
+mkdir /sistema
+mkdir /sistema/logs
+write_file /sistema/logs/app.log "Novo Registro"
+read_file /sistema/logs/app.log
+io_status
+```
+
+`io_demo` usa a fila [98, 183, 37, 122, 14] e cabeça inicial na trilha 53
+com as opções padrão. O SSTF atende 37 → 14 → 98 → 122 → 183, com 208
+trilhas de deslocamento. Use `--scheduler fcfs` ao iniciar para atender na
+ordem de chegada. Cada disco tem sua própria cabeça e a posição persiste
+entre operações. Nos lotes de E/S do sistema de arquivos, a trilha é dada
+pelo resto do índice do bloco físico pelo número de trilhas.
+
+`create`, `write`, `update` e `truncate` gravam o i-node e os dados.
+`read` lê o i-node antes de buscar os blocos de dados. `write_file` cria ou
+atualiza um arquivo com texto ou com `--size`; `read_file` é um alias de
+`read`. Os lotes de uma fase são escalonados juntos. A leitura do i-node e
+a leitura dos dados são fases distintas por causa da dependência entre elas.
+
+### RAID 5
+
+```bash
+python3 -m filesystem.disk_io --raid 5 --disks 3 --blocks 16
+```
+
+```text
+mkdir /dados
+write_file /dados/planilha.csv --size 8KB
+fail_disk 2
+read_file /dados/planilha.csv
+rebuild_disk 2
+io_status
+```
+
+Com três discos, cada faixa comporta dois blocos lógicos e um bloco de
+paridade XOR. A posição da paridade gira entre os discos. Os i-nodes
+também fazem parte das faixas; por isso, os dois blocos de dados de um
+arquivo podem cair em faixas diferentes. O log mostra o disco, o bloco
+físico e o bloco lógico ou a indicação de paridade.
+
+Com um disco em falha, o sistema continua aceitando leituras e gravações.
+A leitura de um bloco indisponível usa o XOR dos demais blocos da faixa.
+`rebuild_disk` regrava as faixas usadas no disco em falha. Duas falhas
+simultâneas tornam o arranjo indisponível. A opção `--raid 0` significa
+modo sem RAID (disco único).
+
+### SSD e nivelamento de desgaste
+
+```bash
+python3 -m filesystem.disk_io --medium ssd --blocks 4
+```
+
+```text
+write_file /registro "Primeira versão"
+write_file /registro "Segunda versão"
+read_file /registro
+io_status
+```
+
+O SSD atende em ordem de chegada, sem deslocamento mecânico. Cada
+gravação escolhe a página física livre com menor contagem de gravações,
+atualiza o mapeamento e devolve a página antiga ao conjunto de páginas
+livres. O modelo usa uma página por bloco, uma página reserva por disco e
+contagem de gravações como aproximação do desgaste. A memória é volátil
+em todos os modos.
