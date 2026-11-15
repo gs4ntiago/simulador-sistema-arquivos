@@ -263,6 +263,9 @@ class IOFileSystem(FileSystem):
         blocks = {node.inode: inode.ljust(size, b"\0")}
         for i, block in enumerate(node.blocks):
             blocks[block] = node.content[i * size:(i + 1) * size].ljust(size, b"\0")
+        self._write_blocks(blocks)
+
+    def _write_blocks(self, blocks):
         self.storage.write(blocks)
 
     def _create_file(self, path, size, content=b""):
@@ -302,7 +305,7 @@ class IOFileSystem(FileSystem):
         return b"".join(data[block] for block in blocks)[:content_length], node.size - content_length
 
 
-def main():
+def main(security=False):
     """Executa o terminal da Etapa 2 com os comandos da Etapa 1."""
     import argparse
     import shlex
@@ -321,15 +324,29 @@ def main():
                         help="0 = sem RAID (disco único); 5 = RAID 5")
     parser.add_argument("--disks", type=int, default=3, help="Discos físicos no RAID 5")
     parser.add_argument("--script", help="Arquivo UTF-8 com comandos")
+    parser.add_argument("--security", action="store_true", help="Ativa a segurança da Etapa 3")
     args = parser.parse_args()
+    security = security or args.security
+    fs_class = IOFileSystem
+    if security:
+        from .security import SecureFileSystem, root_password
+        fs_class = SecureFileSystem
+        try:
+            password = root_password(args.script)
+        except (FileSystemError, EOFError, KeyboardInterrupt) as error:
+            parser.error(str(error) or "Configuração de senha interrompida.")
     try:
-        fs = IOFileSystem(args.blocks, args.block_size, medium=args.medium, raid=args.raid,
+        fs = fs_class(args.blocks, args.block_size, medium=args.medium, raid=args.raid,
                           disk_count=args.disks, head=args.head, tracks=args.tracks,
-                          algorithm=args.scheduler)
+                          algorithm=args.scheduler, **({"password": password} if security else {}))
     except ValueError as error:
         parser.error(str(error))
 
-    shell = Shell(fs)
+    if security:
+        from .security import SecurityShell
+        shell = SecurityShell(fs, scripted=bool(args.script))
+    else:
+        shell = Shell(fs)
     extra = Parser(prog="E/S", add_help=False)
     subs = extra.add_subparsers(dest="command", required=True, parser_class=Parser)
     write_file = subs.add_parser("write_file", add_help=False)
@@ -350,7 +367,7 @@ def main():
             return True
         command = words[0]
         try:
-            if command == "read_file":
+            if command == "read_file" and not security:
                 return shell.execute(shlex.join(["read", *words[1:]]))
             if command not in {"write_file", "fail_disk", "rebuild_disk", "io_status", "io_demo"}:
                 result = shell.execute(line)
@@ -373,6 +390,7 @@ def main():
                     raise FileSystemError("Informe um caminho de arquivo sem barra final.")
                 parent, _, name = options.path.rstrip("/").rpartition("/")
                 directory = fs.resolve(parent or ("/" if options.path.startswith("/") else "."))
+                fs.check_access(directory, 1)
                 if name in directory.children:
                     if options.size is not None:
                         fs.resize(options.path, options.size)
@@ -386,10 +404,16 @@ def main():
                         fs.create_text(options.path, options.text)
                 print(f"Arquivo gravado: {options.path} ({fs.file(options.path).size} bytes).")
             elif command == "fail_disk":
+                if security:
+                    fs.require_root(command)
                 fs.storage.fail(options.disk - 1)
             elif command == "rebuild_disk":
+                if security:
+                    fs.require_root(command)
                 fs.storage.rebuild(options.disk - 1)
             elif command == "io_status":
+                if security:
+                    fs.require_root(command)
                 print(fs.storage.status())
             elif command == "io_demo":
                 tracks = options.tracks or [98, 183, 37, 122, 14]
@@ -404,7 +428,8 @@ def main():
                 print("\n".join(fs.storage.report))
                 fs.storage.report.clear()
 
-    print(fs.storage.status())
+    if not security:
+        print(fs.storage.status())
     if args.script:
         try:
             with open(args.script, encoding="utf-8") as source:

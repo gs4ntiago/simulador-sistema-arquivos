@@ -18,6 +18,10 @@ class Node:
     inode: int | None = None
     blocks: list[int] = field(default_factory=list)
 
+    owner: str = "root"
+    group: str = "admin"
+    mode: int = 0o755
+
     @property
     def path(self):
         return "/" if self.parent is None else self.parent.path.rstrip("/") + "/" + self.name
@@ -32,6 +36,12 @@ class FileSystem:
         self.root = Node("", None)
         self.cwd = self.root
 
+    def check_access(self, node, required):
+        """Ponto de extensão para controle de acesso."""
+
+    def _new_node(self, name, parent, directory=True):
+        return Node(name, parent, directory=directory)
+
     def resolve(self, path):
         if not path:
             raise FileSystemError("Caminho vazio.")
@@ -41,6 +51,7 @@ class FileSystem:
                 continue
             if not node.directory:
                 raise FileSystemError(f"Não é diretório: {node.path}")
+            self.check_access(node, 1)
             if part == "..":
                 node = node.parent or node
             elif part in node.children:
@@ -59,13 +70,14 @@ class FileSystem:
         parent = self.resolve(prefix or ("/" if path.startswith("/") else "."))
         if not parent.directory:
             raise FileSystemError("O destino não é um diretório.")
+        self.check_access(parent, 3)
         if name in parent.children:
             raise FileSystemError("O destino já existe.")
         return parent, name
 
     def mkdir(self, path):
         parent, name = self._destination(path)
-        parent.children[name] = Node(name, parent)
+        parent.children[name] = self._new_node(name, parent)
 
     def rename(self, path, new_name):
         """Renomeia um diretório no mesmo pai, preservando seus descendentes."""
@@ -77,6 +89,7 @@ class FileSystem:
         if (not new_name or new_name in (".", "..")
                 or "/" in new_name or "\x00" in new_name):
             raise FileSystemError("Informe apenas um nome válido, sem barras.")
+        self.check_access(node.parent, 3)
         if new_name == node.name:
             return
         if new_name in node.parent.children:
@@ -89,7 +102,7 @@ class FileSystem:
         if size < 0:
             raise FileSystemError("Tamanho negativo.")
         parent, name = self._destination(path)
-        node = Node(name, parent, directory=False)
+        node = self._new_node(name, parent, directory=False)
         self._allocate(node, size)
         parent.children[name] = node
 
@@ -140,6 +153,15 @@ class FileSystem:
         node = self.resolve(path)
         if node is self.root:
             raise FileSystemError("Não é permitido remover a raiz.")
+        self.check_access(node.parent, 3)
+        def check_subtree(item):
+            if item.children:
+                self.check_access(item, 3)
+                for child in item.children.values():
+                    check_subtree(child)
+
+        if recursive:
+            check_subtree(node)
         current = self.cwd
         while current:
             if current is node:
@@ -159,12 +181,19 @@ class FileSystem:
         node = self.resolve(path)
         if not node.directory:
             raise FileSystemError("Não é um diretório.")
+        self.check_access(node, 1)
         self.cwd = node
+
+    def can_list(self, node):
+        return True
 
     def tree(self, path="/"):
         root = self.resolve(path)
+        self.check_access(root, 5 if root.directory else 4)
         lines = [root.path]
         def visit(node, prefix):
+            if node is not root and node.directory and not self.can_list(node):
+                return
             children = sorted(node.children.values(), key=lambda n: (not n.directory, n.name))
             for index, child in enumerate(children):
                 last = index == len(children) - 1

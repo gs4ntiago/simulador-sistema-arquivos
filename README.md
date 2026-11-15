@@ -179,3 +179,59 @@ atualiza o mapeamento e devolve a página antiga ao conjunto de páginas
 livres. O modelo usa uma página por bloco, uma página reserva por disco e
 contagem de gravações como aproximação do desgaste. A memória é volátil
 em todos os modos.
+
+## Etapa 3 — Segurança integrada à E/S
+
+Execute `python3 main.py --security`. As opções de HDD, SSD, escalonamento e
+RAID 5 da Etapa 2 também estão disponíveis. Na primeira interação, defina a senha
+do root simulado. A sessão começa como visitante e `login` solicita a senha
+sem exibi-la. Use `logout` para encerrar a sessão e `whoami` para consultar a
+identidade. Em scripts, forneça a senha inicial e de login do root por
+`SIM_ROOT_PASSWORD` e as demais por `SIM_PASSWORD_<usuário>`.
+
+Como root, configure usuários, grupos e permissões:
+
+```text
+login --user root
+groupadd devs
+useradd carlos --group devs
+mkdir /sistema
+write_file /sistema/config.sys "configuração interna"
+chmod 750 /sistema/config.sys
+mkdir /home
+mkdir /home/carlos
+chown carlos:devs /home/carlos
+chmod 700 /home/carlos
+logout
+```
+
+Como Carlos:
+
+```text
+login --user carlos
+read_file /sistema/config.sys
+write_file /home/carlos/segredo.txt "mensagem confidencial"
+encrypt_file /home/carlos/segredo.txt
+read_file /home/carlos/segredo.txt
+```
+
+A leitura de `config.sys` gera uma negativa registrada na auditoria. Scripts
+encerram ao primeiro erro. As permissões usam três dígitos octais para
+proprietário, grupo e outros. Diretórios exigem execução para travessia e
+escrita mais execução para alterar entradas. O proprietário também pode usar
+`chmod`. Cadastro, `chown`, diagnósticos físicos, falha e reconstrução de disco,
+`antivirus_scan` e `audit_log` exigem root em MODO_KERNEL.
+
+Usuários têm senhas derivadas com PBKDF2-HMAC-SHA256 e salt individual.
+A cifra didática usa fluxo de HMAC-SHA256 com nonce aleatório e autenticação
+com chave separada. O conteúdo cifrado chega aos blocos antes do cálculo de
+paridade. Use `decrypt_file` com a chave para editar ou redimensionar o arquivo.
+Os comandos de cifra aceitam `--key`, obrigatório em scripts. Na sessão
+interativa, omita a opção para digitar a chave sem eco.
+
+Como root, execute `antivirus_scan /` e `audit_log`. A varredura compara os
+hashes SHA-256 dos blocos alocados de cada arquivo e de seu i-node com o registro
+das gravações. A regra de assinatura reconhece os marcadores
+`SIMULATED_MALWARE` e `EICAR-STANDARD-ANTIVIRUS-TEST-FILE`. Para arquivos cifrados,
+o resultado de assinatura é registrado na cifragem e o hash é verificado sobre
+os blocos cifrados. Disco, contas e auditoria ficam em memória durante a execução.

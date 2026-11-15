@@ -68,6 +68,9 @@ class Shell:
         self.fs = fs
         self.parser = command_parser()
 
+    def show_change(self, message):
+        print(self.fs.tree())
+
     def execute(self, line):
         """Retorna False para sair; erros são tratados pelo chamador."""
         words = shlex.split(line, comments=True)
@@ -81,13 +84,13 @@ class Shell:
             print(HELP)
         elif cmd == "mkdir":
             fs.mkdir(args.path)
-            print(fs.tree())
+            self.show_change(f"Diretório criado: {args.path}")
         elif cmd == "rename":
             fs.rename(args.path, args.new_name)
-            print(fs.tree())
+            self.show_change(f"Operação concluída: {args.path}")
         elif cmd == "create":
             fs.create(args.path, args.size)
-            print(fs.tree())
+            self.show_change(f"Operação concluída: {args.path}")
         elif cmd in ("update", "truncate"):
             fs.resize(args.path, args.size)
             print(f"Arquivo atualizado: {fs.file(args.path).size} bytes.")
@@ -110,6 +113,7 @@ class Shell:
             print(fs.tree(args.path))
         elif cmd == "ls":
             node = fs.resolve(args.path)
+            fs.check_access(node, 5 if node.directory else 4)
             if node.directory:
                 for child in sorted(node.children.values(), key=lambda n: n.name):
                     print(child.name + ("/" if child.directory else f" ({child.size} bytes)"))
