@@ -49,8 +49,9 @@ class Drive:
         self.data = {}
         self.pages = {}
         # Uma página extra permite escrever fora do lugar antes de liberar a antiga.
-        self.wear = [0] * (capacity + 1)
-        self.free_pages = set(range(capacity + 1))
+        if medium == "ssd":
+            self.wear = [0] * (capacity + 1)
+            self.free_pages = set(range(capacity + 1))
 
     def service(self, requests):
         if self.medium == "hdd":
@@ -247,13 +248,13 @@ class Storage:
 class IOFileSystem(FileSystem):
     """Sistema de arquivos da Etapa 1 com leitura e gravação físicas."""
     def __init__(self, total_blocks=64, block_size=4096, *, medium="hdd", raid=0,
-                 disk_count=3, head=53, tracks=200, algorithm="sstf"):
+                 disk_count=3, head=53, tracks=200, algorithm="sstf", swap_blocks=0):
         super().__init__(total_blocks, block_size)
         if not 0 <= head < tracks or tracks < 1:
             raise ValueError("A cabeça inicial deve estar dentro do intervalo de trilhas.")
         if raid == 5 and disk_count < 3:
             raise ValueError("RAID 5 precisa de ao menos três discos.")
-        self.storage = Storage(total_blocks, block_size, medium, raid, disk_count,
+        self.storage = Storage(total_blocks + swap_blocks, block_size, medium, raid, disk_count,
                                head, tracks, algorithm)
 
     def _store(self, node):
@@ -325,7 +326,24 @@ def main(security=False):
     parser.add_argument("--disks", type=int, default=3, help="Discos físicos no RAID 5")
     parser.add_argument("--script", help="Arquivo UTF-8 com comandos")
     parser.add_argument("--security", action="store_true", help="Ativa a segurança da Etapa 3")
+    parser.add_argument("--memory", action="store_true", help="Ativa a memória híbrida da Etapa 4")
+    parser.add_argument("--ram-size", type=parse_size, default=8 * 1024**2)
+    parser.add_argument("--reserved-size", type=parse_size, default=4 * 1024**2)
+    parser.add_argument("--kernel-size", type=parse_size, default=1024**2)
+    parser.add_argument("--swap-pages", type=int, default=2048)
+    parser.add_argument("--replacement", choices=("lru", "second-chance"), default="lru")
+    parser.add_argument("--report-every", type=int, default=5,
+                        help="Intervalo em operações de memória; 0 desativa o relatório periódico")
     args = parser.parse_args()
+    swap_blocks = 0
+    memory_commands = None
+    if args.memory:
+        from .memory import Memory, PAGE_SIZE
+        from .memory_cli import HELP as MEMORY_HELP, MemoryCommands
+        if args.report_every < 0 or args.swap_pages < 1 or args.block_size < 1:
+            parser.error("Intervalo negativo, swap vazio ou tamanho de bloco inválido.")
+        blocks_per_page = (PAGE_SIZE + args.block_size - 1) // args.block_size
+        swap_blocks = args.swap_pages * blocks_per_page
     security = security or args.security
     fs_class = IOFileSystem
     if security:
@@ -336,9 +354,16 @@ def main(security=False):
         except (FileSystemError, EOFError, KeyboardInterrupt) as error:
             parser.error(str(error) or "Configuração de senha interrompida.")
     try:
-        fs = fs_class(args.blocks, args.block_size, medium=args.medium, raid=args.raid,
-                          disk_count=args.disks, head=args.head, tracks=args.tracks,
-                          algorithm=args.scheduler, **({"password": password} if security else {}))
+        fs = fs_class(
+            args.blocks, args.block_size, medium=args.medium, raid=args.raid,
+            disk_count=args.disks, head=args.head, tracks=args.tracks,
+            algorithm=args.scheduler, swap_blocks=swap_blocks,
+            **({"password": password} if security else {}),
+        )
+        if args.memory:
+            memory = Memory(fs, args.ram_size, args.reserved_size, args.kernel_size,
+                            args.swap_pages, args.replacement)
+            memory_commands = MemoryCommands(memory, args.report_every, security)
     except ValueError as error:
         parser.error(str(error))
 
@@ -367,6 +392,9 @@ def main(security=False):
             return True
         command = words[0]
         try:
+            if memory_commands and command in memory_commands.names:
+                memory_commands.execute(words)
+                return True
             if command == "read_file" and not security:
                 return shell.execute(shlex.join(["read", *words[1:]]))
             if command not in {"write_file", "fail_disk", "rebuild_disk", "io_status", "io_demo"}:
@@ -380,6 +408,8 @@ def main(security=False):
                         "  io_demo [trilhas...] [--head <trilha>] [--scheduler sstf|fcfs]\n"
                         "  fail_disk <número> | rebuild_disk <número>"
                     )
+                    if memory_commands:
+                        print(MEMORY_HELP)
                 return result
 
             options = extra.parse_args(words)

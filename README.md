@@ -1,17 +1,18 @@
 # Projeto de Sistemas Operacionais
 
-Projeto didático que simula componentes de um sistema operacional em três
-etapas cumulativas: organização do armazenamento, entrada e saída (E/S) de disco
-e segurança. Desenvolvido em Python 3.10 ou superior, sem dependências externas.
+Projeto didático que simula componentes de um sistema operacional em quatro
+etapas cumulativas: organização do armazenamento, entrada e saída (E/S) de disco,
+segurança e gerenciamento de memória. Desenvolvido em Python 3.10 ou superior, sem dependências externas.
 O armazenamento e o estado do simulador ficam em memória durante a execução.
 
-**Etapa atual: 3 — Segurança e proteção do sistema.**
+**Etapa atual: 4 — Gerenciamento de memória.**
 
 | Etapa | Tema | Como executar |
 | --- | --- | --- |
 | 1 | Sistema de arquivos, i-nodes e alocação de blocos | `python3 main.py` |
 | 2 | E/S de disco, escalonamento, SSD e RAID 5 | `python3 -m filesystem.disk_io` |
-| 3 (atual) | Modos de execução, autenticação, permissões, criptografia e integridade | `python3 main.py --security` |
+| 3 | Modos de execução, autenticação, permissões, criptografia e integridade | `python3 main.py --security` |
+| 4 (atual) | RAM reservada, memória virtual, swap e compactação | `python3 main.py --memory` |
 
 Execute os comandos a partir da raiz do projeto.
 
@@ -187,7 +188,7 @@ livres. O modelo usa uma página por bloco, uma página reserva por disco e
 contagem de gravações como aproximação do desgaste. A memória é volátil
 em todos os modos.
 
-## Etapa 3 — Segurança e proteção do sistema (atual)
+## Etapa 3 — Segurança e proteção do sistema
 
 Esta etapa usa a árvore e a alocação da Etapa 1 sobre a camada de E/S da
 Etapa 2. A identidade da sessão determina quais operações ela pode executar,
@@ -268,13 +269,43 @@ das gravações. A regra de assinatura reconhece os marcadores
 o resultado de assinatura é registrado na cifragem e o hash é verificado sobre
 os blocos cifrados. Disco, contas e auditoria ficam em memória durante a execução.
 
+## Etapa 4 — Gerenciamento de memória
+
+Execute `python3 main.py --memory` para usar os comandos de memória, arquivos e E/S na mesma sessão. Para reproduzir os dois exemplos com apenas duas molduras dinâmicas e substituição LRU, execute:
+
+```bash
+python3 main.py --memory --ram-size 4104KB --script exemplo_memoria.txt
+```
+
+O roteiro libera o driver de rede, deixando duas lacunas de 1 MB. A compactação move o driver de criptografia e forma um bloco de 2 MB que comporta o novo driver de 1536 KB. Em seguida, o navegador de 10 KB recebe três páginas e ocupa duas molduras durante a execução. Ao voltar à página 0, ele recupera do swap o byte 42 gravado antes da substituição.
+
+| Opção | Padrão | Efeito |
+| --- | --- | --- |
+| `--ram-size` | 8 MB | RAM física total, incluindo a reserva |
+| `--reserved-size` | 4 MB | Região contígua para o núcleo e processos críticos |
+| `--kernel-size` | 1 MB | Núcleo fixado no início da reserva |
+| `--swap-pages` | 2048 | Slots de 4 KB disponíveis para garantir páginas virtuais |
+| `--replacement` | `lru` | Use `second-chance` para testar a Segunda Chance com ponteiro circular |
+| `--report-every` | 5 | Emite ocupação e fragmentação a cada N operações de memória bem-sucedidas. Consultas de status não contam. Zero desativa a emissão automática |
+
+A reserva usa o primeiro intervalo livre que comporta o processo. O mapa mostra endereços em bytes com fim exclusivo. A compactação atualiza a base dos processos críticos e mantém o núcleo no endereço zero. A RAM total e a reserva devem ser múltiplos de 4 KB.
+
+Cada página lógica recebe um slot na partição de swap ao criar o processo. A primeira referência carrega uma página zerada. Quando as molduras acabam, a política global escolhe uma vítima entre todos os processos, grava seus bytes e reutiliza a moldura. A referência posterior à vítima lê os bytes no disco simulado da Etapa 2, com a configuração de HDD, SSD ou RAID da sessão. A partição fica após os blocos do sistema de arquivos. O encerramento devolve os slots e as molduras ao simulador.
+
+`translate_address --process NOME --page N --offset B` atualiza o histórico de acesso e informa o endereço físico absoluto em bytes. O deslocamento padrão é zero. `execute_step` aceita `"LOAD_DATA Página N"` e `"STORE_DATA Página N VALOR"` para ler ou gravar o primeiro byte da página (valor de 0 a 255). Em LRU, o instante do último uso corresponde ao número do acesso simulado. Na Segunda Chance, um acesso liga o bit de referência e a varredura circular limpa os bits até encontrar uma vítima.
+
+`memory_status --reserved` mostra as lacunas e o maior bloco livre. `memory_status --virtual` distingue os bytes solicitados, a capacidade arredondada para páginas, o desperdício nas molduras residentes e as páginas enviadas ao disco. Use `memory_status` para consultar as duas regiões.
+
+Para combinar a memória com a segurança da Etapa 3, inicie com `--memory --security` e faça login. Cada usuário pode criar e acessar seus processos normais. O root pode operar sobre qualquer processo, criar processos críticos, ver o mapa reservado e executar a compactação.
+
 ## Estrutura do projeto
 
 - `filesystem/core.py` — árvore, i-nodes, alocação e fragmentação da Etapa 1.
 - `filesystem/cli.py` — comandos básicos e terminal da Etapa 1.
 - `filesystem/disk_io.py` — E/S, escalonamento e RAID 5 da Etapa 2.
 - `filesystem/security.py` — identidade, permissões, criptografia e auditoria da Etapa 3.
-- `main.py` — ponto de entrada para a Etapa 1 e, com `--security`, para a Etapa 3.
+- `filesystem/memory.py` e `filesystem/memory_cli.py` — gerência de memória e comandos da Etapa 4.
+- `main.py` — terminal básico, com opções `--security` e `--memory` para as etapas integradas.
 - `exemplo.txt` — roteiro de comandos da Etapa 1.
 
 ## Testes

@@ -1,0 +1,16 @@
+# Use --ram-size 4104KB para obter duas molduras após a reserva de 4 MB.
+create_process --name Kernel_DiskDriver --size 512KB --type critical
+create_process --name Kernel_NetDriver --size 1024KB --type critical
+create_process --name Kernel_CryptoEngine --size 512KB --type critical
+terminate_process --name Kernel_NetDriver
+memory_status --reserved
+memory_compact --reserved
+create_process --name NovoDriver --size 1536KB --type critical
+
+create_process --name App_Navegador --size 10KB --type normal
+execute_step --process App_Navegador --instruction "STORE_DATA Página 0 42"
+translate_address --process App_Navegador --page 1
+translate_address --process App_Navegador --page 1 --offset 16
+execute_step --process App_Navegador --instruction "LOAD_DATA Página 2"
+execute_step --process App_Navegador --instruction "LOAD_DATA Página 0"
+memory_status
